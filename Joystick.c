@@ -26,8 +26,6 @@ these buttons for our use.
 
 #include "Joystick.h"
 
-extern const uint8_t image_data[0x12c1] PROGMEM;
-
 // Main entry point.
 int main(void) {
 	// We'll start by performing hardware and peripheral setup.
@@ -52,18 +50,7 @@ void SetupHardware(void) {
 
 	// We need to disable clock division before initializing the USB hardware.
 	clock_prescale_set(clock_div_1);
-	// We can then initialize our hardware and peripherals, including the USB stack.
 
-	#ifdef ALERT_WHEN_DONE
-	// Both PORTD and PORTB will be used for the optional LED flashing and buzzer.
-	#warning LED and Buzzer functionality enabled. All pins on both PORTB and \
-PORTD will toggle when printing is done.
-	DDRD  = 0xFF; //Teensy uses PORTD
-	PORTD =  0x0;
-                  //We'll just flash all pins on both ports since the UNO R3
-	DDRB  = 0xFF; //uses PORTB. Micro can use either or, but both give us 2 LEDs
-	PORTB =  0x0; //The ATmega328P on the UNO will be resetting, so unplug it?
-	#endif
 	// The USB stack should be initialized last.
 	USB_Init();
 }
@@ -140,12 +127,7 @@ void HID_Task(void) {
 
 typedef enum {
 	SYNC_CONTROLLER,
-	SYNC_POSITION,
-	STOP_X,
-	STOP_Y,
-	MOVE_X,
-	MOVE_Y,
-	DONE
+	MOVE
 } State_t;
 State_t state = SYNC_CONTROLLER;
 
@@ -154,8 +136,7 @@ int echoes = 0;
 USB_JoystickReport_Input_t last_report;
 
 int report_count = 0;
-int xpos = 0;
-int ypos = 0;
+int time = 0;
 int portsval = 0;
 
 // Prepare the next report for the host.
@@ -183,8 +164,8 @@ void GetNextReport(USB_JoystickReport_Input_t* const ReportData) {
 		case SYNC_CONTROLLER:
 			if (report_count > 100)
 			{
-				report_count = 0;
-				state = SYNC_POSITION;
+				time = 0;
+				state = MOVE;
 			}
 			else if (report_count == 25 || report_count == 50)
 			{
@@ -196,72 +177,35 @@ void GetNextReport(USB_JoystickReport_Input_t* const ReportData) {
 			}
 			report_count++;
 			break;
-		case SYNC_POSITION:
-			if (report_count == 250)
-			{
-				report_count = 0;
-				xpos = 0;
-				ypos = 0;
-				state = STOP_X;
+		case MOVE:
+			time++;
+			if (time < 40) {
+				//if you want to move the camera before movement starts
+				ReportData->RX = 0;
 			}
-			else
-			{
-				// Moving faster with LX/LY
-				ReportData->LX = STICK_MIN;
-				ReportData->LY = STICK_MIN;
+			if (time > 45 && time < 55) {
+				//initial jump
+				ReportData->Button |= SWITCH_A;
 			}
-			if (report_count == 75 || report_count == 150)
-			{
-				// Clear the screen
-				ReportData->Button |= SWITCH_MINUS;
+			if (time == 58) {
+				//throw nut
+				ReportData->Button |= SWITCH_Y;
 			}
-			report_count++;
-			break;
-		case STOP_X:
-			state = MOVE_X;
-			break;
-		case STOP_Y:
-			if (ypos < 120 - 1)
-				state = MOVE_Y;
-			else
-				state = DONE;
-			break;
-		case MOVE_X:
-			if (ypos % 2)
-			{
-				ReportData->HAT = HAT_LEFT;
-				xpos--;
+			if (time == 69) {
+				//dive
+				ReportData->Button |= SWITCH_ZL;
+				ReportData->Button |= SWITCH_Y;
 			}
-			else
-			{
-				ReportData->HAT = HAT_RIGHT;
-				xpos++;
+			if (time > 71) {
+				//catch nut
+				ReportData->Button |= SWITCH_Y;
 			}
-			if (xpos > 0 && xpos < 320 - 1)
-				state = STOP_X;
-			else
-				state = STOP_Y;
+			if (time == 100) {
+				//repeat
+				time = 55;
+			}
 			break;
-		case MOVE_Y:
-			ReportData->HAT = HAT_BOTTOM;
-			ypos++;
-			state = STOP_X;
-			break;
-		case DONE:
-			#ifdef ALERT_WHEN_DONE
-			portsval = ~portsval;
-			PORTD = portsval; //flash LED(s) and sound buzzer if attached
-			PORTB = portsval;
-			_delay_ms(250);
-			#endif
-			return;
 	}
-
-	// Inking
-	if (state != SYNC_CONTROLLER && state != SYNC_POSITION)
-		if (pgm_read_byte(&(image_data[(xpos / 8) + (ypos * 40)])) & 1 << (xpos % 8))
-			ReportData->Button |= SWITCH_A;
-
 	// Prepare to echo this report
 	memcpy(&last_report, ReportData, sizeof(USB_JoystickReport_Input_t));
 	echoes = ECHOES;
